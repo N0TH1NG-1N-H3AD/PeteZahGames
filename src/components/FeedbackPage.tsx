@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { MessageSquare, Heart, Trash2, Send, Loader2, Lock } from "lucide-react";
 
 interface Entry { id: string; content: string; username?: string; email?: string; user_id: string; created_at: number; }
+interface Comment { id: string; content: string; username?: string; avatar_url?: string; created_at: number; }
 
 function timeAgo(ts: number) {
   const d = Date.now() - ts;
@@ -22,6 +23,12 @@ export default function FeedbackPage({ onNavigate }: { onNavigate: (url: string)
   const [isAdmin, setIsAdmin] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [liked, setLiked] = useState<Set<string>>(new Set());
+  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
+  const [commentTarget, setCommentTarget] = useState<string | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newComment, setNewComment] = useState("");
+  const [commentPosting, setCommentPosting] = useState(false);
   const [authed, setAuthed] = useState(false);
 
   useEffect(() => {
@@ -32,7 +39,15 @@ export default function FeedbackPage({ onNavigate }: { onNavigate: (url: string)
           setAuthed(true);
           setUserId(d.user.id);
           setIsAdmin((d.user.is_admin ?? 0) >= 1);
-          return fetch("/api/feedback").then(r => r.json()).then(fd => setEntries(fd.entries || []));
+          return fetch("/api/feedback").then(r => r.json()).then(fd => {
+            const entries = fd.entries || [];
+            setEntries(entries);
+            entries.forEach((e: Entry) => {
+              fetch(`/api/likes?type=feedback&targetId=${e.id}`)
+                .then(r => r.json())
+                .then(d => setLikeCounts(prev => ({ ...prev, [e.id]: d.count || 0 })));
+            });
+          });
         }
       })
       .finally(() => setLoading(false));
@@ -67,11 +82,40 @@ export default function FeedbackPage({ onNavigate }: { onNavigate: (url: string)
       body: JSON.stringify({ type: "feedback", targetId: id }),
     });
     setLiked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setLikeCounts(p => ({ ...p, [id]: (p[id] || 0) + (liked.has(id) ? -1 : 1) }));
+  }
+
+  async function openComments(id: string) {
+    setCommentTarget(prev => prev === id ? null : id);
+    if (commentTarget === id) return;
+    setCommentsLoading(true);
+    setComments([]);
+    fetch(`/api/comments?type=feedback&targetId=${id}`)
+      .then(r => r.json())
+      .then(d => setComments(d.comments || []))
+      .finally(() => setCommentsLoading(false));
+  }
+
+  async function postComment() {
+    if (!newComment.trim() || !commentTarget) return;
+    setCommentPosting(true);
+    try {
+      const r = await fetch("/api/comment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ type: "feedback", targetId: commentTarget, content: newComment }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setComments(p => [...p, { id: d.id, content: newComment, created_at: Date.now() }]);
+        setNewComment("");
+      }
+    } finally { setCommentPosting(false); }
   }
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ background: "hsl(220 30% 7%)" }}>
-      {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 flex-shrink-0" style={{ borderBottom: "1px solid hsl(220 18% 11%)" }}>
         <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
           style={{ background: "linear-gradient(135deg, hsl(215 85% 50%), hsl(250 75% 55%))" }}>
@@ -172,6 +216,12 @@ export default function FeedbackPage({ onNavigate }: { onNavigate: (url: string)
                         background: liked.has(entry.id) ? "hsl(0 65% 50% / 0.1)" : "transparent",
                       }}>
                       <Heart size={10} fill={liked.has(entry.id) ? "currentColor" : "none"} />
+                      {(likeCounts[entry.id] || 0) > 0 && <span>{likeCounts[entry.id]}</span>}
+                    </button>
+                    <button onClick={() => openComments(entry.id)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] transition-all"
+                      style={{ color: commentTarget === entry.id ? "hsl(215 85% 62%)" : "hsl(220 15% 34%)" }}>
+                      <MessageSquare size={10} />
                     </button>
                     {(isAdmin || entry.user_id === userId) && (
                       <button onClick={() => del(entry.id)}
@@ -184,6 +234,45 @@ export default function FeedbackPage({ onNavigate }: { onNavigate: (url: string)
                     )}
                   </div>
                 </div>
+              <AnimatePresence>
+                {commentTarget === entry.id && (
+                  <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                    <div className="px-4 pb-4 pt-3" style={{ borderTop: "1px solid hsl(220 18% 13%)" }}>
+                      {commentsLoading ? (
+                        <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin" style={{ color: "hsl(215 85% 52%)" }} /></div>
+                      ) : comments.length === 0 ? (
+                        <p className="text-[10px] text-center py-2" style={{ color: "hsl(220 15% 30%)" }}>No comments yet</p>
+                      ) : (
+                        <div className="space-y-2 mb-3">
+                          {comments.map(c => (
+                            <div key={c.id} className="flex gap-2 items-start">
+                              <div className="w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center text-[8px] font-bold" style={{ background: "hsl(215 85% 40%)", color: "hsl(215 85% 80%)" }}>
+                                {(c.username || "?")[0].toUpperCase()}
+                              </div>
+                              <div>
+                                <span className="text-[10px] font-semibold mr-1.5" style={{ color: "hsl(215 85% 60%)" }}>{c.username || "User"}</span>
+                                <span className="text-[11px]" style={{ color: "hsl(220 15% 62%)" }}>{c.content}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2 items-center">
+                        <input value={newComment} onChange={e => setNewComment(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") postComment(); }}
+                          placeholder="Add a comment..."
+                          className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none"
+                          style={{ background: "hsl(220 25% 9%)", border: "1px solid hsl(220 18% 15%)", color: "hsl(220 15% 88%)", fontFamily: "inherit" }} />
+                        <button onClick={postComment} disabled={commentPosting || !newComment.trim()}
+                          className="p-1.5 rounded-lg transition-all"
+                          style={{ background: "hsl(215 85% 52% / 0.15)", border: "1px solid hsl(215 85% 52% / 0.2)", opacity: commentPosting || !newComment.trim() ? 0.4 : 1 }}>
+                          {commentPosting ? <Loader2 size={11} className="animate-spin" style={{ color: "hsl(215 85% 60%)" }} /> : <Send size={11} style={{ color: "hsl(215 85% 60%)" }} />}
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               </motion.div>
             ))}
           </>

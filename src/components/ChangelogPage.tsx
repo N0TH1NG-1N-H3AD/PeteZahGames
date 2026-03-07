@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Megaphone, ChevronDown, ChevronUp, Heart, Trash2, Send, Loader2, Plus } from "lucide-react";
+import { Megaphone, ChevronDown, ChevronUp, Heart, Trash2, Send, Loader2, Plus, MessageSquare } from "lucide-react";
 
-interface Entry { id: string; title: string; content: string; username?: string; created_at: number; }
+interface Entry { id: string; title: string; content: string; username?: string; created_at: number; likes?: number; }
+interface Comment { id: string; content: string; username?: string; avatar_url?: string; created_at: number; }
 
 function timeAgo(ts: number) {
   const d = Date.now() - ts;
@@ -19,6 +20,12 @@ export default function ChangelogPage({ onNavigate }: { onNavigate: (url: string
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [liked, setLiked] = useState<Set<string>>(new Set());
+  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
+  const [commentTarget, setCommentTarget] = useState<string | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newComment, setNewComment] = useState("");
+  const [commentPosting, setCommentPosting] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newContent, setNewContent] = useState("");
@@ -28,7 +35,15 @@ export default function ChangelogPage({ onNavigate }: { onNavigate: (url: string
   useEffect(() => {
     fetch("/api/changelog")
       .then(r => r.json())
-      .then(d => setEntries(d.entries || []))
+      .then(d => {
+        const entries = d.entries || [];
+        setEntries(entries);
+        entries.forEach((e: Entry) => {
+          fetch(`/api/likes?type=changelog&targetId=${e.id}`)
+            .then(r => r.json())
+            .then(d => setLikeCounts(prev => ({ ...prev, [e.id]: d.count || 0 })));
+        });
+      })
       .finally(() => setLoading(false));
 
     fetch("/api/me")
@@ -65,18 +80,45 @@ export default function ChangelogPage({ onNavigate }: { onNavigate: (url: string
   }
 
   async function like(id: string) {
-    const key = id;
     await fetch("/api/likes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "changelog", targetId: id }),
     });
-    setLiked(p => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setLiked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setLikeCounts(p => ({ ...p, [id]: (p[id] || 0) + (liked.has(id) ? -1 : 1) }));
+  }
+
+  async function openComments(id: string) {
+    setCommentTarget(id);
+    setCommentsLoading(true);
+    setComments([]);
+    fetch(`/api/comments?type=changelog&targetId=${id}`)
+      .then(r => r.json())
+      .then(d => setComments(d.comments || []))
+      .finally(() => setCommentsLoading(false));
+  }
+
+  async function postComment() {
+    if (!newComment.trim() || !commentTarget) return;
+    setCommentPosting(true);
+    try {
+      const r = await fetch("/api/comment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ type: "changelog", targetId: commentTarget, content: newComment }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setComments(p => [...p, { id: d.id, content: newComment, created_at: Date.now() }]);
+        setNewComment("");
+      }
+    } finally { setCommentPosting(false); }
   }
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ background: "hsl(220 30% 7%)" }}>
-      {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 flex-shrink-0" style={{ borderBottom: "1px solid hsl(220 18% 11%)" }}>
         <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
           style={{ background: "linear-gradient(135deg, hsl(215 85% 50%), hsl(250 75% 55%))" }}>
@@ -174,6 +216,12 @@ export default function ChangelogPage({ onNavigate }: { onNavigate: (url: string
                     background: liked.has(entry.id) ? "hsl(0 65% 50% / 0.1)" : "transparent",
                   }}>
                   <Heart size={10} fill={liked.has(entry.id) ? "currentColor" : "none"} />
+                  {(likeCounts[entry.id] || 0) > 0 && <span>{likeCounts[entry.id]}</span>}
+                </button>
+                <button onClick={e => { e.stopPropagation(); openComments(entry.id); }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] transition-all"
+                  style={{ color: commentTarget === entry.id ? "hsl(215 85% 62%)" : "hsl(220 15% 36%)" }}>
+                  <MessageSquare size={10} />
                 </button>
                 {isAdmin && (
                   <button onClick={e => { e.stopPropagation(); del(entry.id); }}
@@ -196,6 +244,45 @@ export default function ChangelogPage({ onNavigate }: { onNavigate: (url: string
                     style={{ color: "hsl(220 15% 58%)", borderTop: "1px solid hsl(220 18% 12%)" }}>
                     {entry.content}
                   </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
+              {commentTarget === entry.id && (
+                <motion.div initial={{ height: 0 }} animate={{ height: "auto" }} exit={{ height: 0 }} className="overflow-hidden">
+                  <div className="px-4 pb-4 pt-3" style={{ borderTop: "1px solid hsl(220 18% 12%)" }}>
+                    {commentsLoading ? (
+                      <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin" style={{ color: "hsl(215 85% 52%)" }} /></div>
+                    ) : comments.length === 0 ? (
+                      <p className="text-[10px] text-center py-2" style={{ color: "hsl(220 15% 30%)" }}>No comments yet</p>
+                    ) : (
+                      <div className="space-y-2 mb-3">
+                        {comments.map(c => (
+                          <div key={c.id} className="flex gap-2 items-start">
+                            <div className="w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center text-[8px] font-bold" style={{ background: "hsl(215 85% 40%)", color: "hsl(215 85% 80%)" }}>
+                              {(c.username || "?")[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-semibold mr-1.5" style={{ color: "hsl(215 85% 60%)" }}>{c.username || "User"}</span>
+                              <span className="text-[11px]" style={{ color: "hsl(220 15% 62%)" }}>{c.content}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2 items-center">
+                      <input value={newComment} onChange={e => setNewComment(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") postComment(); }}
+                        placeholder="Add a comment..."
+                        className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none"
+                        style={{ background: "hsl(220 25% 9%)", border: "1px solid hsl(220 18% 15%)", color: "hsl(220 15% 88%)", fontFamily: "inherit" }} />
+                      <button onClick={postComment} disabled={commentPosting || !newComment.trim()}
+                        className="p-1.5 rounded-lg transition-all"
+                        style={{ background: "hsl(215 85% 52% / 0.15)", border: "1px solid hsl(215 85% 52% / 0.2)", opacity: commentPosting || !newComment.trim() ? 0.4 : 1 }}>
+                        {commentPosting ? <Loader2 size={11} className="animate-spin" style={{ color: "hsl(215 85% 60%)" }} /> : <Send size={11} style={{ color: "hsl(215 85% 60%)" }} />}
+                      </button>
+                    </div>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
