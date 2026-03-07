@@ -5,12 +5,7 @@ export async function getFeedbackHandler(req, res) {
   if (!req.session.user) return res.status(401).json({ error: 'Unauthorized' });
   const user = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(req.session.user.id);
   const isAdmin = user && user.is_admin >= 1;
-  let entries;
-  if (isAdmin) {
-    entries = db.prepare('SELECT f.*, u.username, u.email, u.avatar_url FROM feedback f LEFT JOIN users u ON f.user_id = u.id ORDER BY f.created_at DESC').all();
-  } else {
-    entries = db.prepare('SELECT f.*, u.username, u.avatar_url FROM feedback f LEFT JOIN users u ON f.user_id = u.id WHERE f.user_id = ? ORDER BY f.created_at DESC').all(req.session.user.id);
-  }
+  const entries = db.prepare('SELECT f.*, u.username, u.email, u.avatar_url FROM feedback f LEFT JOIN users u ON f.user_id = u.id ORDER BY f.created_at DESC').all();
   res.json({ entries, isAdmin });
 }
 
