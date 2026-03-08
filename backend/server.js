@@ -1,4 +1,3 @@
-// todo, add all my old ddos stuff from server-old.js and security/ddos-shield.js, etc
 import express from "express";
 import { createServer } from "node:http";
 import { hostname } from "node:os";
@@ -67,6 +66,67 @@ app.get("/sw.js", (_req, res) => {
   res.sendFile(path.join(__dirname, "../dist/sw.js"));
 });
 
+const promptCache = new Map();
+const CACHE_TTL = 60 * 60 * 1000;
+const CACHE_MAX_PROMPT_LENGTH = 120;
+const CACHE_MAX_SIZE = 500;
+
+function normalizeCacheKey(prompt) {
+  return prompt
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getCached(key) {
+  const entry = promptCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) {
+    promptCache.delete(key);
+    return null;
+  }
+  return entry.response;
+}
+
+function setCache(key, response) {
+  if (promptCache.size >= CACHE_MAX_SIZE) {
+    const firstKey = promptCache.keys().next().value;
+    promptCache.delete(firstKey);
+  }
+  promptCache.set(key, { response, expires: Date.now() + CACHE_TTL });
+}
+
+const aiQueue = (() => {
+  const MAX_QUEUE = 25;
+  const MAX_CONCURRENT = 5;
+  let active = 0;
+  const queue = [];
+
+  function next() {
+    if (active >= MAX_CONCURRENT || queue.length === 0) return;
+    active++;
+    const { task, resolve, reject } = queue.shift();
+    task()
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        active--;
+        next();
+      });
+  }
+
+  return function enqueue(task) {
+    return new Promise((resolve, reject) => {
+      if (queue.length >= MAX_QUEUE) {
+        return reject(Object.assign(new Error("Queue full"), { code: "QUEUE_FULL" }));
+      }
+      queue.push({ task, resolve, reject });
+      next();
+    });
+  };
+})();
+
 const aiLimiter = (() => {
   const requests = new Map();
   return (req, res, next) => {
@@ -87,41 +147,61 @@ app.post("/api/generate", aiLimiter, express.json({ limit: "10mb" }), async (req
   if (!prompt || typeof prompt !== "string" || prompt.length > 10000)
     return res.status(400).json({ error: "Invalid prompt" });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000);
+  const isSimplePrompt = prompt.length <= CACHE_MAX_PROMPT_LENGTH && !groqMessages;
+  const cacheKey = isSimplePrompt ? normalizeCacheKey(prompt) : null;
+
+  if (cacheKey) {
+    const cached = getCached(cacheKey);
+    if (cached) return res.json({ response: cached, cached: true });
+  }
+
+  const callGroq = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+
+    try {
+      const messages = groqMessages || [
+        ...(system ? [{ role: "system", content: system }] : []),
+        { role: "user", content: prompt },
+      ];
+
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: model || "llama-3.1-8b-instant",
+          messages,
+          max_tokens: 1024,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("Groq API error:", data);
+        throw Object.assign(new Error("AI service error"), { code: "GROQ_ERROR" });
+      }
+
+      return data.choices?.[0]?.message?.content ?? "No response.";
+    } catch (error) {
+      clearTimeout(timeout);
+      throw error;
+    }
+  };
 
   try {
-    const messages = groqMessages || [
-      ...(system ? [{ role: "system", content: system }] : []),
-      { role: "user", content: prompt },
-    ];
-
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: model || "llama-3.1-8b-instant",
-        messages,
-        max_tokens: 1024,
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Groq API error:", data);
-      return res.status(502).json({ error: "AI service error" });
-    }
-
-    return res.json({ response: data.choices?.[0]?.message?.content ?? "No response." });
+    const result = await aiQueue(callGroq);
+    if (cacheKey) setCache(cacheKey, result);
+    return res.json({ response: result });
   } catch (error) {
-    clearTimeout(timeout);
+    if (error.code === "QUEUE_FULL") return res.status(503).json({ error: "Server busy, please try again shortly" });
     if (error.name === "AbortError") return res.status(504).json({ error: "Request timeout" });
+    if (error.code === "GROQ_ERROR") return res.status(502).json({ error: "AI service error" });
     console.error("AI proxy error:", error.message);
     return res.status(500).json({ error: "AI service unavailable" });
   }
