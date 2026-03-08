@@ -36,15 +36,17 @@ export const localStorageLimiter = rateLimit({
 
 export function createApiLimiter(shield) {
   return rateLimit({
-    windowMs: 15000,
+    windowMs: 60000,
     max: req => {
+      if (req.session?.user?.id) return 2000;
       const token = extractToken(req);
-      return verifyToken(token, req) ? 200 : 60;
+      if (verifyToken(token, req)) return 1000;
+      return 150;
     },
     keyGenerator: req => {
+      if (req.session?.user?.id) return `user:${req.session.user.id}`;
       const token = extractToken(req);
       if (verifyToken(token, req)) return `token:${token.slice(0, 16)}`;
-      if (req.session?.user?.id) return `user:${req.session.user.id}`;
       return toIPv4(null, req);
     },
     standardHeaders: true,
@@ -60,8 +62,8 @@ export function createApiLimiter(shield) {
 export function createAiLimiter(shield) {
   return rateLimit({
     windowMs: 60000,
-    max: 20,
-    keyGenerator: req => toIPv4(null, req),
+    max: req => req.session?.user?.id ? 60 : 20,
+    keyGenerator: req => req.session?.user?.id ? `user:${req.session.user.id}` : toIPv4(null, req),
     handler: (req, res) => {
       updateIPReputation(toIPv4(null, req), -3);
       shield.incrementBlocked(toIPv4(null, req), 'ai_rate_limit');
