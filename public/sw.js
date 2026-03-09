@@ -1,4 +1,3 @@
-
 if (navigator.userAgent.includes('Firefox')) {
   Object.defineProperty(globalThis, 'crossOriginIsolated', {
     value: true,
