@@ -1065,6 +1065,17 @@ function TabPane({
     );
   }
 
+  if (tab.url === "petezah://settings") {
+  return (
+    <div
+      className="absolute inset-0"
+      style={{ display: isVisible ? "block" : "none" }}
+    >
+      <AccountPage onNavigate={onNavigate} />
+    </div>
+  );
+}
+
   if (tab.url === "petezah://account") {
     return (
       <div

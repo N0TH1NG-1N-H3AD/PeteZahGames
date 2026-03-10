@@ -4,7 +4,7 @@ import {
   User, Settings, LogOut, Eye, EyeOff, Check, AlertCircle, Loader2,
   Zap, ChevronRight, Lock, Mail, KeyRound, Download, Upload, Trash2,
   Megaphone, MessageSquare, Palette, Shield, Sliders, Camera,
-  UserCog, Users, Ban, UserMinus, ShieldCheck, ShieldOff, Plus,
+  UserCog, Users, Ban, UserMinus, ShieldCheck, ShieldOff, Plus, ExternalLink, Image, Pipette,
 } from "lucide-react";
 
 interface AuthUser {
@@ -16,14 +16,14 @@ interface AdminUser extends AuthUser {
 }
 
 const THEMES = [
-  { id: "default",         label: "Ocean",    color: "#0A1D37" },
-  { id: "swampy-green",    label: "Forest",   color: "#1A3C34" },
-  { id: "royal-purple",    label: "Royal",    color: "#2A1A3C" },
-  { id: "blood-red",       label: "Crimson",  color: "#3C0A1A" },
-  { id: "midnight-forest", label: "Midnight", color: "#1F2A2F" },
-  { id: "cyber-neon",      label: "Cyber",    color: "#1A1A2E" },
-  { id: "desert-oasis",    label: "Desert",   color: "#3C2F1A" },
-  { id: "glacial-frost",   label: "Frost",    color: "#2A3C4F" },
+  { id: "default",         label: "Ocean",    color: "#0d1117" },
+  { id: "swampy-green",    label: "Forest",   color: "#060d09" },
+  { id: "royal-purple",    label: "Royal",    color: "#08060e" },
+  { id: "blood-red",       label: "Crimson",  color: "#0a0405" },
+  { id: "midnight-forest", label: "Midnight", color: "#050908" },
+  { id: "cyber-neon",      label: "Cyber",    color: "#05050d" },
+  { id: "desert-oasis",    label: "Desert",   color: "#0a0904" },
+  { id: "glacial-frost",   label: "Frost",    color: "#050810" },
 ];
 
 const SITE_PRESETS = [
@@ -35,10 +35,37 @@ const SITE_PRESETS = [
 
 type Section = "profile" | "appearance" | "cloaking" | "behavior" | "data" | "admin";
 
+const THEME_COLORS: Record<string, { bgColor: string; textColor: string }> = {
+  "default":         { bgColor: "hsl(220 30% 7%)", textColor: "#e6edf3" },
+  "swampy-green":    { bgColor: "#060d09", textColor: "#cde8d0" },
+  "royal-purple":    { bgColor: "#08060e", textColor: "#ddd0f5" },
+  "blood-red":       { bgColor: "#0a0405", textColor: "#f5cdd0" },
+  "midnight-forest": { bgColor: "#050908", textColor: "#c8ddd4" },
+  "cyber-neon":      { bgColor: "#05050d", textColor: "#d0d0ff" },
+  "desert-oasis":    { bgColor: "#0a0904", textColor: "#f0e0c0" },
+  "glacial-frost":   { bgColor: "#050810", textColor: "#c8e0f0" },
+};
+
 function applySettingsNow(s: Record<string, string>) {
   if (s.theme) {
     document.body.className = document.body.className.replace(/theme-[\w-]+/g, "").trim();
     document.body.classList.add(`theme-${s.theme}`);
+    const tc = THEME_COLORS[s.theme];
+    if (tc && !s.backgroundColor && !s.backgroundImage) {
+      document.body.style.color = tc.textColor;
+    }
+  }
+  const bgImg = s.backgroundImage ?? localStorage.getItem("backgroundImage");
+  const bgColor = s.backgroundColor ?? localStorage.getItem("backgroundColor");
+  if (bgImg) {
+    document.body.style.backgroundImage = `url(${bgImg})`;
+    document.body.style.backgroundSize = "cover";
+    document.body.style.backgroundRepeat = "no-repeat";
+    document.body.style.backgroundPosition = "center";
+    document.body.style.backgroundColor = "";
+  } else {
+    document.body.style.backgroundImage = "none";
+    if (bgColor) document.body.style.backgroundColor = bgColor;
   }
   if (s.siteTitle) document.title = s.siteTitle;
   if (s.siteLogo) {
@@ -70,8 +97,23 @@ function applySettingsNow(s: Record<string, string>) {
   if (s.disableParticles === "true") {
     document.querySelectorAll(".particles, .particle, canvas[data-particles]").forEach(el => el.parentNode?.removeChild(el));
   }
-  Object.entries(s).forEach(([k, v]) => localStorage.setItem(k, v));
+  if (s.theme && !s.backgroundColor && !s.backgroundImage) {
+    const tc = THEME_COLORS[s.theme];
+    if (tc) {
+      localStorage.setItem("backgroundColor", tc.bgColor);
+      document.body.style.backgroundColor = tc.bgColor;
+      document.body.style.backgroundImage = "none";
+      document.body.style.color = tc.textColor;
+    }
+  }
+  if (!s.backgroundImage) {
+    localStorage.removeItem("backgroundImage");
+  } else {
+    localStorage.setItem("backgroundImage", s.backgroundImage);
+  }
+  Object.entries(s).forEach(([k, v]) => { if (k !== "backgroundImage") localStorage.setItem(k, v); });
   localStorage.setItem("settingsUpdated", Date.now().toString());
+  window.dispatchEvent(new CustomEvent("petezah-settings-updated"));
 }
 
 function FluidCanvas({ enabled }: { enabled: boolean }) {
@@ -307,6 +349,22 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
 
   const avatarRef = useRef<HTMLInputElement>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const bgImgRef = useRef<HTMLInputElement>(null);
+
+  function openAboutBlank() {
+    const w = window.open("about:blank", "_blank");
+    if (!w || w.closed) { alert("Please allow popups for about:blank to work."); return; }
+    w.document.title = localStorage.getItem("siteTitle") || "Home";
+    const link = w.document.createElement("link");
+    link.rel = "icon";
+    link.href = localStorage.getItem("siteLogo") || "/logo.png";
+    w.document.head.appendChild(link);
+    const iframe = w.document.createElement("iframe");
+    iframe.src = "/";
+    iframe.style.cssText = "width:100vw;height:100vh;border:none;";
+    w.document.body.style.margin = "0";
+    w.document.body.appendChild(iframe);
+  }
 
   const [s, setS] = useState<Record<string, string>>({});
   const [settingsSaved, setSettingsSaved] = useState(false);
@@ -323,7 +381,7 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
   }, []);
 
   useEffect(() => {
-    const keys = ["theme","siteTitle","siteLogo","panicKey","panicUrl","beforeUnload","disableRightClick","disableParticles","autocloak"];
+    const keys = ["theme","siteTitle","siteLogo","panicKey","panicUrl","beforeUnload","disableRightClick","disableParticles","autocloak","backgroundColor","backgroundImage"];
     const loaded: Record<string,string> = {};
     keys.forEach(k => { const v = localStorage.getItem(k); if (v !== null) loaded[k] = v; });
     setS(loaded);
@@ -661,12 +719,13 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
               <div style={{ maxWidth: "500px" }}>
                 <h2 style={{ fontSize: "15px", fontWeight: 700, color: C.text, margin: "0 0 3px" }}>Appearance</h2>
                 <p style={{ fontSize: "11px", color: C.textSub, margin: "0 0 20px" }}>Customize the look of PeteZah</p>
+
                 <p style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: C.textMuted, margin: "0 0 10px" }}>Theme</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "7px", marginBottom: "20px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "7px", marginBottom: "22px" }}>
                   {THEMES.map(t => {
                     const active = s.theme === t.id;
                     return (
-                      <button key={t.id} onClick={() => setVal("theme", t.id)} style={{
+                      <button key={t.id} onClick={() => { setVal("theme", t.id); setVal("backgroundColor", ""); setVal("backgroundImage", ""); }} style={{
                         display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", padding: "10px 6px", borderRadius: "9px", cursor: "pointer",
                         background: active ? `${C.accentDim}40` : C.surface,
                         border: `1px solid ${active ? C.borderFocus : C.border}`,
@@ -680,7 +739,66 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
                     );
                   })}
                 </div>
-                <ApplyBtn saved={settingsSaved} onClick={applySettings} />
+
+                <Divider />
+                <p style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: C.textMuted, margin: "14px 0 10px" }}>Background</p>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "6px", color: C.textMuted }}>Background Color</label>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div style={{ position: "relative", width: "36px", height: "36px", borderRadius: "8px", overflow: "hidden", border: `1px solid ${C.border}`, flexShrink: 0 }}>
+                          <input type="color" value={s.backgroundColor || THEME_COLORS[s.theme || "default"]?.bgColor || "#0A1D37"}
+                            onChange={e => { setVal("backgroundColor", e.target.value); setVal("backgroundImage", ""); }}
+                            style={{ position: "absolute", inset: "-4px", width: "calc(100% + 8px)", height: "calc(100% + 8px)", cursor: "pointer", border: "none", padding: 0 }} />
+                        </div>
+                        <input type="text" value={s.backgroundColor || THEME_COLORS[s.theme || "default"]?.bgColor || "#0A1D37"}
+                          onChange={e => { setVal("backgroundColor", e.target.value); setVal("backgroundImage", ""); }}
+                          style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: "8px", color: C.text, fontSize: "12px", padding: "8px 10px", outline: "none", fontFamily: "monospace" }} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: "block", fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "6px", color: C.textMuted }}>Background Image</label>
+                    <input ref={bgImgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                      const file = e.target.files?.[0]; if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = ev => { setVal("backgroundImage", ev.target?.result as string); setVal("backgroundColor", ""); };
+                      reader.readAsDataURL(file);
+                      e.target.value = "";
+                    }} />
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button onClick={() => bgImgRef.current?.click()} style={{
+                        flex: 1, display: "flex", alignItems: "center", gap: "8px", padding: "9px 12px", borderRadius: "8px",
+                        background: C.surface, border: `1px solid ${C.border}`, color: C.textSub, fontSize: "12px", cursor: "pointer", transition: "border-color 0.15s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = C.borderFocus}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+                        <Image size={12} />
+                        {s.backgroundImage ? "Image set — click to change" : "Upload image"}
+                      </button>
+                      {s.backgroundImage && (
+                        <button onClick={() => setVal("backgroundImage", "")} style={{
+                          padding: "9px 12px", borderRadius: "8px", background: "transparent",
+                          border: `1px solid hsl(0 60% 50% / 0.2)`, color: C.danger, fontSize: "11px", cursor: "pointer", transition: "all 0.15s",
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = "hsl(0 60% 50% / 0.08)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {s.backgroundImage && (
+                      <div style={{ marginTop: "8px", borderRadius: "8px", overflow: "hidden", height: "80px", border: `1px solid ${C.border}` }}>
+                        <img src={s.backgroundImage} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="Background preview" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                  <ApplyBtn saved={settingsSaved} onClick={applySettings} />
               </div>
             )}
 
@@ -715,6 +833,18 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
                 </div>
 
                 <Divider />
+                <p style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: C.textMuted, margin: "14px 0 6px" }}>About:Blank</p>
+                <p style={{ fontSize: "11px", color: C.textSub, margin: "0 0 10px" }}>Open the site disguised inside an about:blank popup</p>
+                <button onClick={openAboutBlank} style={{
+                  display: "flex", alignItems: "center", gap: "8px", padding: "9px 16px", borderRadius: "8px", marginBottom: "18px",
+                  background: C.accentDim, border: `1px solid ${C.borderFocus}`,
+                  color: C.accent, fontSize: "12px", fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+                }}>
+                  <ExternalLink size={12} />
+                  Open in about:blank
+                </button>
+
+                <Divider />
                 <p style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: C.textMuted, margin: "14px 0 6px" }}>Panic Key</p>
                 <p style={{ fontSize: "11px", color: C.textSub, margin: "0 0 10px" }}>Press a key to instantly redirect the browser</p>
                 <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "10px", marginBottom: "4px" }}>
@@ -734,13 +864,29 @@ export default function AccountPage({ onNavigate }: { onNavigate: (url: string) 
                     <Toggle label="Exit warning" desc="Show a confirmation before closing the tab" checked={s.beforeUnload === "true"} onChange={() => toggle("beforeUnload")} />
                   </div>
                   <div style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <Toggle label="Autocloak" desc="Wrap the site in about:blank on load" checked={s.autocloak === "true"} onChange={() => toggle("autocloak")} />
+                    <Toggle label="Autocloak" desc="Wrap the site in about:blank on load" checked={s.autocloak === "true"} onChange={() => {
+                      const next = s.autocloak !== "true";
+                      setVal("autocloak", next ? "true" : "false");
+                      localStorage.setItem("autocloak", next ? "true" : "false");
+                      if (next) openAboutBlank();
+                    }} />
                   </div>
                   <div style={{ borderBottom: `1px solid ${C.border}` }}>
                     <Toggle label="Disable right click" desc="Block the browser context menu" checked={s.disableRightClick === "true"} onChange={() => toggle("disableRightClick")} />
                   </div>
                   <Toggle label="Disable particles" desc="Remove background animations on new tab" checked={s.disableParticles === "true"} onChange={() => toggle("disableParticles")} />
                 </SectionCard>
+                <Divider />
+                <p style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: C.textMuted, margin: "14px 0 6px" }}>About:Blank</p>
+                <p style={{ fontSize: "11px", color: C.textSub, margin: "0 0 10px" }}>Open the site disguised inside an about:blank popup</p>
+                <button onClick={openAboutBlank} style={{
+                  display: "flex", alignItems: "center", gap: "8px", padding: "9px 16px", borderRadius: "8px", marginBottom: "18px",
+                  background: C.accentDim, border: `1px solid ${C.borderFocus}`,
+                  color: C.accent, fontSize: "12px", fontWeight: 600, cursor: "pointer", transition: "all 0.2s",
+                }}>
+                  <ExternalLink size={12} />
+                  Open in about:blank
+                </button>
                 <ApplyBtn saved={settingsSaved} onClick={applySettings} />
               </div>
             )}
